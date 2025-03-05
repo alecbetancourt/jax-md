@@ -174,11 +174,20 @@ class ForceField(object):
 
   # ML correction parameters
   # their shapes are [# types, # types]
-  corr_par_morse_de: Array
-  corr_par_morse_re: Array
-  corr_par_morse_a: Array
-  corr_par_LJ: Array
-  corr_par_G: Array
+  corr_lj_sigma: Array
+  corr_lj_epsilon: Array
+  corr_lj_sig_mat: Array
+  corr_lj_eps_mat: Array
+  corr_morse_de: Array
+  corr_morse_a: Array
+  corr_morse_re: Array
+  corr_lj_const_r: Array
+  corr_lj_const_a: Array
+  corr_num_gaussians: Array # should this be an int
+  corr_gauss_amplitude: Array
+  corr_gauss_width: Array
+  corr_gauss_center: Array
+  corr_add_const: Array # should this be a float
 
   @classmethod
   def init_from_arg_dict(cls, kwargs):

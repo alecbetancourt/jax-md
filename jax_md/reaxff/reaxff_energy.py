@@ -45,7 +45,8 @@ def calculate_reaxff_energy(species: Array,
                             tors_2013: bool = False,
                             tapered_reaxff: bool = False,
                             solver_model: str = "EEM",
-                            use_ML_correction: bool = False):
+                            use_ML_correction: bool = False,
+                            ret_ML_correction: bool = False):
   '''
   Calculate full ReaxFF potential
   Args:
@@ -287,27 +288,63 @@ def calculate_reaxff_energy(species: Array,
                                             force_field)
 
 
-  return (cou_pot + vdw_pot + charge_pot
-          + cov_pot + lone_pot + val_pot
-          + total_penalty + total_conj
-          + overunder_pot + tor_conj
-            + torsion_pot + hb_pot +
-            self_energy + ML_correction), charges
+  if ret_ML_correction:
+    return (cou_pot + vdw_pot + charge_pot
+            + cov_pot + lone_pot + val_pot
+            + total_penalty + total_conj
+            + overunder_pot + tor_conj
+              + torsion_pot + hb_pot +
+              self_energy + ML_correction), charges, ML_correction
+  else:
+    return (cou_pot + vdw_pot + charge_pot
+            + cov_pot + lone_pot + val_pot
+            + total_penalty + total_conj
+            + overunder_pot + tor_conj
+              + torsion_pot + hb_pot +
+              self_energy + ML_correction), charges
+
+
+def gauss_nrg(amplitude: Array,
+              width: Array,
+              center: Array,
+              nbr_dists: Array,
+              nbr_mask: Array):
+  return nbr_mask * (amplitude * jnp.exp(-width * (nbr_dists - center)**2))
 
 def calculate_ML_correction(species: Array,
                           far_nbr_mask: Array,
                           far_neigh_types: Array,
                           far_nbr_dists: Array,
                           force_field: ForceField):
+
+  # find indices of parameters
   species = species.reshape(-1, 1)
-  # these parameter arrays need to be symm. Ex. par[i,j] == par[j,i]
-  my_de = force_field.corr_par_morse_de[far_neigh_types, species]
-  my_re = force_field.corr_par_morse_re[far_neigh_types, species]
-  my_a = force_field.corr_par_morse_a[far_neigh_types, species]
-  # far_nbr_dists, my_de, my_re, my_a: NxK
-  energy = my_de * (1.0 - jnp.exp(-my_a * (far_nbr_dists - my_re)))**2
-  energy = energy * far_nbr_mask # mask the dummy atoms
-  return jnp.sum(energy / 2) # divide by 2 since we are double counting pairs
+
+  # extract parameters according to atom types
+  my_sig = force_field.corr_lj_sig_mat[far_neigh_types, species]
+  my_eps = force_field.corr_lj_eps_mat[far_neigh_types, species]
+  my_lj_r = force_field.corr_lj_const_r[far_neigh_types, species]
+  my_lj_a = force_field.corr_lj_const_a[far_neigh_types, species]
+  my_gauss_amp = force_field.corr_gauss_amplitude
+  my_gauss_width = force_field.corr_gauss_width
+  my_gauss_center = force_field.corr_gauss_center
+  my_add_const = force_field.corr_add_const
+
+  # calculate LJ term
+  inv_dist = my_sig / far_nbr_dists
+  lj_r_energy = my_lj_r * (4 * my_eps * (inv_dist ** 12)) * 23.0609
+  lj_a_energy = my_lj_a * (4 * my_eps * (-inv_dist ** 6)) * 23.0609
+  lj_energy = lj_r_energy + lj_a_energy
+
+  # vectorize gaussian function over all widths and find gaussian energy
+  gauss_fn = jax.vmap(gauss_nrg, in_axes=(0,0,0,None, None))
+  gauss_energy = gauss_fn(my_gauss_amp, my_gauss_width, my_gauss_center, far_nbr_dists, far_nbr_mask)
+
+  # divide by 2 since we are double counting pairs
+  gauss_energy = jnp.sum(gauss_energy)/2
+  lj_energy = jnp.sum(lj_energy)/2
+
+  return lj_energy + gauss_energy + my_add_const
 
   
 

@@ -11,6 +11,7 @@ from jax_md.reaxff.reaxff_forcefield import ForceField
 from dataclasses import fields
 from jax import custom_jvp
 from frozendict import frozendict
+from jax_md import util
 
 @custom_jvp
 def safe_sqrt(x):
@@ -54,6 +55,7 @@ def read_force_field(force_field_file,
                      cutoff2 = 1e-3,
                      hbond_close_cutoff = 0.01,
                      hbond_far_cutoff = 7.5,
+                     corr_params = None,
                      dtype = jnp.float32):
   # to store all arguments together before creating the class
   FF_field_dict = {f.name:None for f in fields(ForceField) if f.init}
@@ -765,12 +767,74 @@ def read_force_field(force_field_file,
   FF_field_dict['softcut_2d'] = onp.zeros_like(FF_field_dict['p1co_off'])
 
   FF_field_dict['params_to_indices'] = frozendict(FF_param_to_index)
-  # correction parameter place holders
-  FF_field_dict['corr_par_morse_de'] = onp.zeros_like(FF_field_dict['p1co_off'])
-  FF_field_dict['corr_par_morse_re'] = onp.zeros_like(FF_field_dict['p1co_off'])
-  FF_field_dict['corr_par_morse_a'] = onp.zeros_like(FF_field_dict['p1co_off'])
-  FF_field_dict['corr_par_LJ'] = onp.zeros_like(FF_field_dict['p1co_off'])
-  FF_field_dict['corr_par_G'] = onp.zeros_like(FF_field_dict['p1co_off'])
+  # correction parameters
+  if corr_params != None:
+    FF_field_dict['corr_lj_sigma'] = onp.zeros((num_atom_types),
+                                    dtype=dtype)
+    FF_field_dict['corr_lj_epsilon'] = onp.zeros((num_atom_types),
+                                    dtype=dtype)
+    FF_field_dict['corr_lj_sig_mat'] = onp.zeros((num_atom_types,
+                                      num_atom_types),
+                                    dtype=dtype)
+    FF_field_dict['corr_lj_eps_mat'] = onp.zeros((num_atom_types,
+                                      num_atom_types),
+                                    dtype=dtype)
+    FF_field_dict['corr_lj_const_r'] = onp.zeros((num_atom_types,
+                                      num_atom_types),
+                                    dtype=dtype)
+    FF_field_dict['corr_lj_const_a'] = onp.zeros((num_atom_types,
+                                      num_atom_types),
+                                    dtype=dtype)
+    FF_field_dict['corr_gauss_amplitude'] = onp.array(corr_params['gauss_amplitude'], dtype=dtype)
+    FF_field_dict['corr_gauss_width'] = onp.array(corr_params['gauss_width'], dtype=dtype)
+    FF_field_dict['corr_gauss_center'] = onp.array(corr_params['gauss_center'], dtype=dtype)
+    FF_field_dict['corr_add_const'] = dtype(corr_params['add_const'])
+
+    # TODO there is a more jax friendly way to do this if this is scaled up
+    # if this is used in the optimizer, the off diagonal terms should be moved
+    # to ensure that parameter updates work correctly; not important currently
+    # if the parameters get added to the ffield file instead of the json file
+    # this would be a good time to redo all of this to be internally consistent
+    for parm in corr_params['sigma']:
+      idx = name_to_index[parm[0]]
+      FF_field_dict['corr_lj_sigma'][idx] = parm[1]
+
+    for parm in corr_params['epsilon']:
+      idx = name_to_index[parm[0]]
+      FF_field_dict['corr_lj_epsilon'][idx] = parm[1]
+
+    sig = FF_field_dict['corr_lj_sigma']
+    eps = FF_field_dict['corr_lj_epsilon']
+    
+    mat1 = sig.reshape(1,-1)
+    mat1 = jnp.tile(mat1,(num_atom_types,1))
+    mat1_tr = mat1.transpose()
+    FF_field_dict['corr_lj_sig_mat'] = (mat1 + mat1_tr) * 0.5
+
+    mat2 = eps.reshape(-1,1).dot(eps.reshape(1,-1))
+    mat2 = util.safe_mask(mat2 > 0, jnp.sqrt, mat2)
+    FF_field_dict['corr_lj_eps_mat'] = mat2
+
+    for parm in corr_params['lj_const_r']:
+      if len(parm) == 2:
+        idx = name_to_index[parm[0]]
+        FF_field_dict['corr_lj_const_r'][idx, idx] = parm[1]
+      else:
+        i = name_to_index[parm[0]]
+        j = name_to_index[parm[1]]
+        FF_field_dict['corr_lj_const_r'][i, j] = parm[2]
+        FF_field_dict['corr_lj_const_r'][j, i] = parm[2]
+
+    for parm in corr_params['lj_const_a']:
+      if len(parm) == 2:
+        idx = name_to_index[parm[0]]
+        FF_field_dict['corr_lj_const_a'][idx, idx] = parm[1]
+      else:
+        i = name_to_index[parm[0]]
+        j = name_to_index[parm[1]]
+        FF_field_dict['corr_lj_const_a'][i, j] = parm[2]
+        FF_field_dict['corr_lj_const_a'][j, i] = parm[2]
+
   FF_fields = ForceField.__dataclass_fields__
   for k in FF_field_dict:
     is_static = k in FF_fields and FF_fields[k].metadata.get('static', False)

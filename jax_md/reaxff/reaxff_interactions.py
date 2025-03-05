@@ -552,6 +552,7 @@ def reaxff_inter_list(displacement: DisplacementFn,
                     tors_2013: bool = False,
                     solver_model: str = "EEM",
                     use_ML_correction: bool = False,
+                    ret_ML_correction: bool = False,
                     short_inters_capacity_multiplier: int = 1.2,
                     long_inters_capacity_multiplier: int = 1.2
                     ) -> Tuple[ReaxFFNeighborListFns,
@@ -837,7 +838,7 @@ def reaxff_inter_list(displacement: DisplacementFn,
                                                       map_metric,
                                                       map_disp)
 
-    energy, charges = calculate_reaxff_energy(species,
+    output = calculate_reaxff_energy(species,
                                             species_AN,
                                             nbr_lists,
                                             close_nbr_dist,
@@ -853,11 +854,16 @@ def reaxff_inter_list(displacement: DisplacementFn,
                                             backprop_solve,
                                             tors_2013,
                                             solver_model=solver_model,
-                                            use_ML_correction=use_ML_correction
+                                            use_ML_correction=use_ML_correction,
+                                            ret_ML_correction=ret_ML_correction
                                             )
 
-
-    return energy
+    if ret_ML_correction:
+      energy, charges, ML_correction = output
+      return energy, ML_correction
+    else:
+      energy, charges = output
+      return energy
 
   return ReaxFFNeighborListFns(allocate, update), energy_fn
 
